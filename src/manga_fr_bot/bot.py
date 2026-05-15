@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import html
 import logging
+import secrets
 
 from pyrogram import Client, filters, idle
 from pyrogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, Message
@@ -24,6 +25,7 @@ DETAIL_CACHE: dict[str, MangaSummary] = {}
 PAGE_CACHE: dict[str, ChapterPages] = {}
 LATEST_CACHE: dict[str, LatestRelease] = {}
 CHAPTER_NAV_CACHE: dict[tuple[str, str], tuple[str | None, str | None]] = {}
+CALLBACK_PAYLOAD_CACHE: dict[str, list[str]] = {}
 
 
 def _truncate(text: str, limit: int) -> str:
@@ -70,6 +72,21 @@ def _manga_detail_caption(
         f"Dernier vu: <b>{seen_label}</b>\n\n"
         f"{description}"
     )
+
+
+def _cb(action: str, *parts: str) -> str:
+    raw = "|".join(["mfr", action, *parts])
+    if len(raw.encode("utf-8")) <= 64:
+        return raw
+
+    for _ in range(8):
+        token = secrets.token_urlsafe(6).replace("-", "").replace("_", "")[:10]
+        if token in CALLBACK_PAYLOAD_CACHE:
+            continue
+        CALLBACK_PAYLOAD_CACHE[token] = [action, *parts]
+        return f"mfr|ref|{token}"
+
+    raise RuntimeError("Could not allocate callback token")
 
 
 class MangaLibraryBot:
@@ -156,9 +173,9 @@ class MangaLibraryBot:
         for manga in results:
             DETAIL_CACHE[manga.id] = manga
 
-        rows = [[InlineKeyboardButton(manga.title[:56], callback_data=f"mfr|detail|{manga.id}")] for manga in results]
-        rows.append([InlineKeyboardButton("Bibliotheque", callback_data="mfr|library|0")])
-        rows.append([InlineKeyboardButton("Latest FR", callback_data="mfr|latest_page|0")])
+        rows = [[InlineKeyboardButton(manga.title[:56], callback_data=_cb("detail", manga.id))] for manga in results]
+        rows.append([InlineKeyboardButton("Bibliotheque", callback_data=_cb("library", "0"))])
+        rows.append([InlineKeyboardButton("Latest FR", callback_data=_cb("latest_page", "0"))])
         await wait.edit(
             "<b>Resultats</b>\n======================\n\nChoisis un manga ci-dessous.",
             reply_markup=InlineKeyboardMarkup(rows),
@@ -178,7 +195,7 @@ class MangaLibraryBot:
                     [
                         InlineKeyboardButton(
                             f"Lire {_truncate(entry.manga_title, 28)}",
-                            callback_data=f"mfr|continue|{entry.manga_id}",
+                            callback_data=_cb("continue", entry.manga_id),
                         )
                     ]
                 )
@@ -187,14 +204,14 @@ class MangaLibraryBot:
             lines.append("<b>Favoris</b>")
         for manga_id, title in favorites[:8]:
             lines.append(f"- {_esc(_truncate(title, 48))}")
-            rows.append([InlineKeyboardButton(title[:50], callback_data=f"mfr|detail|{manga_id}")])
+            rows.append([InlineKeyboardButton(title[:50], callback_data=_cb("detail", manga_id))])
         rows.append(
             [
-                InlineKeyboardButton("Historique", callback_data="mfr|history|0"),
-                InlineKeyboardButton("Voir updates", callback_data="mfr|updates|0"),
+                InlineKeyboardButton("Historique", callback_data=_cb("history", "0")),
+                InlineKeyboardButton("Voir updates", callback_data=_cb("updates", "0")),
             ]
         )
-        rows.append([InlineKeyboardButton("Accueil", callback_data="mfr|home|0")])
+        rows.append([InlineKeyboardButton("Accueil", callback_data=_cb("home", "0"))])
 
         if not favorites and not progress:
             await target.reply(
@@ -223,11 +240,11 @@ class MangaLibraryBot:
             )
             rows.append(
                 [
-                    InlineKeyboardButton("Continuer", callback_data=f"mfr|continue|{entry.manga_id}"),
-                    InlineKeyboardButton("Fiche", callback_data=f"mfr|detail|{entry.manga_id}"),
+                    InlineKeyboardButton("Continuer", callback_data=_cb("continue", entry.manga_id)),
+                    InlineKeyboardButton("Fiche", callback_data=_cb("detail", entry.manga_id)),
                 ]
             )
-        rows.append([InlineKeyboardButton("Bibliotheque", callback_data="mfr|library|0")])
+        rows.append([InlineKeyboardButton("Bibliotheque", callback_data=_cb("library", "0"))])
         await target.reply("\n".join(lines), reply_markup=InlineKeyboardMarkup(rows))
 
     async def show_updates(self, target: Message, user_id: int) -> None:
@@ -264,9 +281,9 @@ class MangaLibraryBot:
             lines.append(f"  Dernier vu: {_esc(prev_label)}")
             rows.append(
                 [
-                    InlineKeyboardButton("Lire", callback_data=f"mfr|read|{latest.id}|{manga_id}"),
-                    InlineKeyboardButton("Marquer vu", callback_data=f"mfr|seen|{manga_id}|{latest.id}"),
-                    InlineKeyboardButton("Fiche", callback_data=f"mfr|detail|{manga_id}"),
+                    InlineKeyboardButton("Lire", callback_data=_cb("read", latest.id, manga_id)),
+                    InlineKeyboardButton("Marquer vu", callback_data=_cb("seen", manga_id, latest.id)),
+                    InlineKeyboardButton("Fiche", callback_data=_cb("detail", manga_id)),
                 ]
             )
             if found >= 8:
@@ -279,7 +296,7 @@ class MangaLibraryBot:
             )
             return
 
-        rows.append([InlineKeyboardButton("Accueil", callback_data="mfr|home|0")])
+        rows.append([InlineKeyboardButton("Accueil", callback_data=_cb("home", "0"))])
         await target.reply("\n".join(lines), reply_markup=InlineKeyboardMarkup(rows))
 
     async def show_latest(self, target: Message, offset: int) -> None:
@@ -300,16 +317,16 @@ class MangaLibraryBot:
         rows = []
         for release in releases:
             label = f"{_truncate(release.manga_title, 28)} - {release.chapter_label}"
-            rows.append([InlineKeyboardButton(label, callback_data=f"mfr|latest|{release.chapter_id}")])
+            rows.append([InlineKeyboardButton(label, callback_data=_cb("latest", release.chapter_id))])
 
         nav: list[InlineKeyboardButton] = []
         if offset > 0:
-            nav.append(InlineKeyboardButton("Prev", callback_data=f"mfr|latest_page|{max(0, offset - 10)}"))
+            nav.append(InlineKeyboardButton("Prev", callback_data=_cb("latest_page", str(max(0, offset - 10)))))
         if len(releases) == 10:
-            nav.append(InlineKeyboardButton("Next", callback_data=f"mfr|latest_page|{offset + 10}"))
+            nav.append(InlineKeyboardButton("Next", callback_data=_cb("latest_page", str(offset + 10))))
         if nav:
             rows.append(nav)
-        rows.append([InlineKeyboardButton("Accueil", callback_data="mfr|home|0")])
+        rows.append([InlineKeyboardButton("Accueil", callback_data=_cb("home", "0"))])
 
         await target.reply(
             "<b>Dernieres sorties FR</b>\n======================\n\nChoisis un chapitre recent pour lire ou ouvrir la fiche du manga.",
@@ -318,6 +335,12 @@ class MangaLibraryBot:
 
     async def callback_router(self, client: Client, cb: CallbackQuery) -> None:
         parts = cb.data.split("|")
+        if len(parts) >= 3 and parts[1] == "ref":
+            resolved = CALLBACK_PAYLOAD_CACHE.get(parts[2])
+            if resolved is None:
+                await cb.answer("Ce bouton a expire. Relance la commande.", show_alert=True)
+                return
+            parts = ["mfr", *resolved]
         action = parts[1]
         await cb.answer()
 
@@ -448,11 +471,11 @@ class MangaLibraryBot:
             "Tu peux ouvrir la fiche ou lire directement ce chapitre.",
             reply_markup=InlineKeyboardMarkup(
                 [
-                    [
-                        InlineKeyboardButton("Fiche", callback_data=f"mfr|detail|{release.manga_id}"),
-                        InlineKeyboardButton("Lire", callback_data=f"mfr|latest_read|{release.chapter_id}|{release.manga_id}"),
-                    ],
-                    [InlineKeyboardButton("Retour latest", callback_data="mfr|latest_page|0")],
+                [
+                    InlineKeyboardButton("Fiche", callback_data=_cb("detail", release.manga_id)),
+                    InlineKeyboardButton("Lire", callback_data=_cb("latest_read", release.chapter_id, release.manga_id)),
+                ],
+                    [InlineKeyboardButton("Retour latest", callback_data=_cb("latest_page", "0"))],
                 ]
             ),
         )
@@ -476,16 +499,16 @@ class MangaLibraryBot:
         caption = _manga_detail_caption(manga, seen_label=last_seen, description_limit=900)
         rows = [
             [
-                InlineKeyboardButton("Chapitres", callback_data=f"mfr|chapters|{manga_id}|0"),
-                InlineKeyboardButton("Favori" if not is_favorite else "Retirer", callback_data=f"mfr|favorite|{manga_id}"),
+                InlineKeyboardButton("Chapitres", callback_data=_cb("chapters", manga_id, "0")),
+                InlineKeyboardButton("Favori" if not is_favorite else "Retirer", callback_data=_cb("favorite", manga_id)),
             ]
         ]
         if progress:
-            rows.append([InlineKeyboardButton("Continuer", callback_data=f"mfr|continue|{manga_id}")])
+            rows.append([InlineKeyboardButton("Continuer", callback_data=_cb("continue", manga_id))])
         rows.append(
             [
-                InlineKeyboardButton("Marquer a jour", callback_data=f"mfr|mark_latest|{manga_id}"),
-                InlineKeyboardButton("Latest FR", callback_data="mfr|latest_page|0"),
+                InlineKeyboardButton("Marquer a jour", callback_data=_cb("mark_latest", manga_id)),
+                InlineKeyboardButton("Latest FR", callback_data=_cb("latest_page", "0")),
             ]
         )
         keyboard = InlineKeyboardMarkup(rows)
@@ -516,17 +539,17 @@ class MangaLibraryBot:
             return
 
         rows = [
-            [InlineKeyboardButton(_chapter_title(ch.chapter, ch.title), callback_data=f"mfr|read|{ch.id}|{manga_id}")]
+            [InlineKeyboardButton(_chapter_title(ch.chapter, ch.title), callback_data=_cb("read", ch.id, manga_id))]
             for ch in chapters
         ]
         nav: list[InlineKeyboardButton] = []
         if offset > 0:
-            nav.append(InlineKeyboardButton("Prev", callback_data=f"mfr|chapters|{manga_id}|{max(0, offset - 10)}"))
+            nav.append(InlineKeyboardButton("Prev", callback_data=_cb("chapters", manga_id, str(max(0, offset - 10)))))
         if len(chapters) == 10:
-            nav.append(InlineKeyboardButton("Next", callback_data=f"mfr|chapters|{manga_id}|{offset + 10}"))
+            nav.append(InlineKeyboardButton("Next", callback_data=_cb("chapters", manga_id, str(offset + 10))))
         if nav:
             rows.append(nav)
-        rows.append([InlineKeyboardButton("Retour fiche", callback_data=f"mfr|detail|{manga_id}")])
+        rows.append([InlineKeyboardButton("Retour fiche", callback_data=_cb("detail", manga_id))])
 
         await target.reply(
             f"<b>{_esc(manga.title)}</b>\n======================\n\nChapitres FR disponibles:",
@@ -579,17 +602,17 @@ class MangaLibraryBot:
         )
         rows = [[]]
         if page_idx > 0:
-            rows[0].append(InlineKeyboardButton("Prev page", callback_data=f"mfr|page|{chapter_id}|{manga_id}|{page_idx - 1}"))
+            rows[0].append(InlineKeyboardButton("Prev page", callback_data=_cb("page", chapter_id, manga_id, str(page_idx - 1))))
         if page_idx < len(pages.page_urls) - 1:
-            rows[0].append(InlineKeyboardButton("Next page", callback_data=f"mfr|page|{chapter_id}|{manga_id}|{page_idx + 1}"))
+            rows[0].append(InlineKeyboardButton("Next page", callback_data=_cb("page", chapter_id, manga_id, str(page_idx + 1))))
         chapter_row: list[InlineKeyboardButton] = []
         if newer_id:
-            chapter_row.append(InlineKeyboardButton("Newer ch.", callback_data=f"mfr|chapter|{newer_id}|{manga_id}"))
+            chapter_row.append(InlineKeyboardButton("Newer ch.", callback_data=_cb("chapter", newer_id, manga_id)))
         if older_id:
-            chapter_row.append(InlineKeyboardButton("Older ch.", callback_data=f"mfr|chapter|{older_id}|{manga_id}"))
+            chapter_row.append(InlineKeyboardButton("Older ch.", callback_data=_cb("chapter", older_id, manga_id)))
         if chapter_row:
             rows.append(chapter_row)
-        rows.append([InlineKeyboardButton("Chapitres", callback_data=f"mfr|chapters|{manga_id}|0")])
+        rows.append([InlineKeyboardButton("Chapitres", callback_data=_cb("chapters", manga_id, "0"))])
         reply_markup = InlineKeyboardMarkup([row for row in rows if row])
 
         if send_new:
@@ -620,14 +643,14 @@ class MangaLibraryBot:
         return InlineKeyboardMarkup(
             [
                 [
-                    InlineKeyboardButton("Latest FR", callback_data="mfr|latest_page|0"),
-                    InlineKeyboardButton("Bibliotheque", callback_data="mfr|library|0"),
+                    InlineKeyboardButton("Latest FR", callback_data=_cb("latest_page", "0")),
+                    InlineKeyboardButton("Bibliotheque", callback_data=_cb("library", "0")),
                 ],
                 [
-                    InlineKeyboardButton("Updates", callback_data="mfr|updates|0"),
-                    InlineKeyboardButton("Historique", callback_data="mfr|history|0"),
+                    InlineKeyboardButton("Updates", callback_data=_cb("updates", "0")),
+                    InlineKeyboardButton("Historique", callback_data=_cb("history", "0")),
                 ],
-                [InlineKeyboardButton("Aide", callback_data="mfr|help|0")],
+                [InlineKeyboardButton("Aide", callback_data=_cb("help", "0"))],
             ]
         )
 
