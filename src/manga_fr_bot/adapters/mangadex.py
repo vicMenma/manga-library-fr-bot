@@ -142,6 +142,22 @@ class MangaDexClient:
             )
         return chapters
 
+    async def get_chapter_context(
+        self,
+        manga_id: str,
+        chapter_id: str,
+        *,
+        limit: int = 100,
+    ) -> tuple[ChapterSummary | None, ChapterSummary | None]:
+        chapters = await self.get_chapters(manga_id, limit=limit, offset=0)
+        for idx, chapter in enumerate(chapters):
+            if chapter.id != chapter_id:
+                continue
+            newer = chapters[idx - 1] if idx > 0 else None
+            older = chapters[idx + 1] if idx + 1 < len(chapters) else None
+            return newer, older
+        return None, None
+
     async def get_latest_releases(self, limit: int = 10, offset: int = 0) -> list[LatestRelease]:
         params = [
             ("translatedLanguage[]", self.language),

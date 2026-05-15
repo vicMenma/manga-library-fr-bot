@@ -8,6 +8,7 @@ A Telegram manga library bot focused on French chapters, built with a MangaDex-f
 - Manga details with status, year, genres, and cover
 - Chapter browser
 - Page-by-page Telegram reader
+- Chapter-to-chapter reader navigation
 - Latest French releases view
 - Favorites
 - Reading progress / continue reading

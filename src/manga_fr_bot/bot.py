@@ -22,6 +22,7 @@ log = logging.getLogger(__name__)
 DETAIL_CACHE: dict[str, MangaSummary] = {}
 PAGE_CACHE: dict[str, ChapterPages] = {}
 LATEST_CACHE: dict[str, LatestRelease] = {}
+CHAPTER_NAV_CACHE: dict[tuple[str, str], tuple[str | None, str | None]] = {}
 
 
 def _truncate(text: str, limit: int) -> str:
@@ -219,6 +220,10 @@ class MangaLibraryBot:
             chapter_id, manga_id = parts[2], parts[3]
             await self.show_reader(client, cb.message, cb.from_user.id, chapter_id, manga_id, 0, send_new=True)
             return
+        if action == "chapter":
+            chapter_id, manga_id = parts[2], parts[3]
+            await self.show_reader(client, cb.message, cb.from_user.id, chapter_id, manga_id, 0, send_new=False)
+            return
         if action == "page":
             chapter_id, manga_id, page_idx = parts[2], parts[3], int(parts[4])
             await self.show_reader(client, cb.message, cb.from_user.id, chapter_id, manga_id, page_idx, send_new=False)
@@ -375,12 +380,20 @@ class MangaLibraryBot:
             page_idx,
         )
 
+        newer_id, older_id = await self._chapter_nav_ids(manga_id, chapter_id)
         caption = f"<b>{manga.title}</b>\n{pages.chapter} - Page <b>{page_idx + 1}/{len(pages.page_urls)}</b>"
         rows = [[]]
         if page_idx > 0:
             rows[0].append(InlineKeyboardButton("Prev page", callback_data=f"mfr|page|{chapter_id}|{manga_id}|{page_idx - 1}"))
         if page_idx < len(pages.page_urls) - 1:
             rows[0].append(InlineKeyboardButton("Next page", callback_data=f"mfr|page|{chapter_id}|{manga_id}|{page_idx + 1}"))
+        chapter_row: list[InlineKeyboardButton] = []
+        if newer_id:
+            chapter_row.append(InlineKeyboardButton("Newer ch.", callback_data=f"mfr|chapter|{newer_id}|{manga_id}"))
+        if older_id:
+            chapter_row.append(InlineKeyboardButton("Older ch.", callback_data=f"mfr|chapter|{older_id}|{manga_id}"))
+        if chapter_row:
+            rows.append(chapter_row)
         rows.append([InlineKeyboardButton("Chapitres", callback_data=f"mfr|chapters|{manga_id}|0")])
         reply_markup = InlineKeyboardMarkup([row for row in rows if row])
 
@@ -397,6 +410,16 @@ class MangaLibraryBot:
             InputMediaPhoto(media=pages.page_urls[page_idx], caption=caption),
             reply_markup=reply_markup,
         )
+
+    async def _chapter_nav_ids(self, manga_id: str, chapter_id: str) -> tuple[str | None, str | None]:
+        cached = CHAPTER_NAV_CACHE.get((manga_id, chapter_id))
+        if cached is not None:
+            return cached
+
+        newer, older = await self.source.get_chapter_context(manga_id, chapter_id)
+        nav_ids = (newer.id if newer else None, older.id if older else None)
+        CHAPTER_NAV_CACHE[(manga_id, chapter_id)] = nav_ids
+        return nav_ids
 
     def _home_kb(self) -> InlineKeyboardMarkup:
         return InlineKeyboardMarkup(
