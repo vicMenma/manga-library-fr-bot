@@ -38,6 +38,16 @@ class LibraryStore:
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     PRIMARY KEY (user_id, manga_id)
                 );
+
+                CREATE TABLE IF NOT EXISTS updates_state (
+                    user_id INTEGER NOT NULL,
+                    manga_id TEXT NOT NULL,
+                    manga_title TEXT NOT NULL,
+                    last_seen_chapter_id TEXT NOT NULL,
+                    last_seen_chapter_label TEXT NOT NULL,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (user_id, manga_id)
+                );
                 """
             )
 
@@ -50,6 +60,10 @@ class LibraryStore:
             if existing:
                 conn.execute(
                     "DELETE FROM favorites WHERE user_id = ? AND manga_id = ?",
+                    (user_id, manga_id),
+                )
+                conn.execute(
+                    "DELETE FROM updates_state WHERE user_id = ? AND manga_id = ?",
                     (user_id, manga_id),
                 )
                 return False
@@ -152,3 +166,41 @@ class LibraryStore:
             )
             for row in rows
         ]
+
+    def mark_seen_chapter(
+        self,
+        user_id: int,
+        manga_id: str,
+        manga_title: str,
+        chapter_id: str,
+        chapter_label: str,
+    ) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO updates_state (
+                    user_id, manga_id, manga_title, last_seen_chapter_id, last_seen_chapter_label, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(user_id, manga_id) DO UPDATE SET
+                    manga_title = excluded.manga_title,
+                    last_seen_chapter_id = excluded.last_seen_chapter_id,
+                    last_seen_chapter_label = excluded.last_seen_chapter_label,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (user_id, manga_id, manga_title, chapter_id, chapter_label),
+            )
+
+    def get_seen_chapter(self, user_id: int, manga_id: str) -> tuple[str, str] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT last_seen_chapter_id, last_seen_chapter_label
+                FROM updates_state
+                WHERE user_id = ? AND manga_id = ?
+                """,
+                (user_id, manga_id),
+            ).fetchone()
+        if row is None:
+            return None
+        return row["last_seen_chapter_id"], row["last_seen_chapter_label"]

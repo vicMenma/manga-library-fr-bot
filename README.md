@@ -10,6 +10,7 @@ A Telegram manga library bot focused on French chapters, built with a MangaDex-f
 - Page-by-page Telegram reader
 - Chapter-to-chapter reader navigation
 - Latest French releases view
+- Favorite update tracking
 - Favorites
 - Reading progress / continue reading
 - SQLite storage for personal library data
@@ -53,6 +54,7 @@ If you open the file in Colab, you can use the form fields directly.
 - `/start` - welcome screen
 - `/library` - favorites and continue reading
 - `/latest` - latest French releases
+- `/updates` - new French chapters from your favorites
 
 ## Notes
 

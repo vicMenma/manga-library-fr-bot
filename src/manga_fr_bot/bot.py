@@ -71,7 +71,8 @@ class MangaLibraryBot:
         self.app.on_message(filters.private & filters.command("start"))(self.start_cmd)
         self.app.on_message(filters.private & filters.command("library"))(self.library_cmd)
         self.app.on_message(filters.private & filters.command("latest"))(self.latest_cmd)
-        self.app.on_message(filters.private & filters.text & ~filters.command(["start", "library", "latest"]))(
+        self.app.on_message(filters.private & filters.command("updates"))(self.updates_cmd)
+        self.app.on_message(filters.private & filters.text & ~filters.command(["start", "library", "latest", "updates"]))(
             self.search_handler
         )
         self.app.on_callback_query(filters.regex(r"^mfr\|"))(self.callback_router)
@@ -85,6 +86,7 @@ class MangaLibraryBot:
             "Commandes utiles:\n"
             "- /library : favoris et reprise de lecture\n"
             "- /latest : derniers chapitres FR\n"
+            "- /updates : nouvelles sorties dans tes favoris\n"
         )
         await msg.reply(text, reply_markup=self._home_kb())
 
@@ -93,6 +95,9 @@ class MangaLibraryBot:
 
     async def latest_cmd(self, _client: Client, msg: Message) -> None:
         await self.show_latest(msg, 0)
+
+    async def updates_cmd(self, _client: Client, msg: Message) -> None:
+        await self.show_updates(msg, msg.from_user.id)
 
     async def search_handler(self, _client: Client, msg: Message) -> None:
         query = msg.text.strip()
@@ -132,6 +137,7 @@ class MangaLibraryBot:
             rows.append([InlineKeyboardButton("Continuer", callback_data=f"mfr|continue|{progress[0].manga_id}")])
         for manga_id, title in favorites[:8]:
             rows.append([InlineKeyboardButton(title[:50], callback_data=f"mfr|detail|{manga_id}")])
+        rows.append([InlineKeyboardButton("Voir updates", callback_data="mfr|updates|0")])
         rows.append([InlineKeyboardButton("Accueil", callback_data="mfr|home|0")])
 
         if len(rows) == 1:
@@ -145,6 +151,57 @@ class MangaLibraryBot:
             "<b>Ta bibliotheque</b>\n======================\n\nRetrouve tes favoris et ta lecture en cours.",
             reply_markup=InlineKeyboardMarkup(rows),
         )
+
+    async def show_updates(self, target: Message, user_id: int) -> None:
+        favorites = self.store.list_favorites(user_id, limit=50)
+        if not favorites:
+            await target.reply(
+                "Tu n'as pas encore de favoris.\n\nAjoute un manga a ta bibliotheque pour suivre les nouveaux chapitres.",
+                reply_markup=self._home_kb(),
+            )
+            return
+
+        rows: list[list[InlineKeyboardButton]] = []
+        lines = ["<b>Nouveautes dans ta bibliotheque</b>", "======================", ""]
+        found = 0
+
+        for manga_id, manga_title in favorites:
+            try:
+                chapters = await self.source.get_chapters(manga_id, limit=1, offset=0)
+            except Exception as exc:  # pragma: no cover
+                log.warning("Updates check failed for %s: %s", manga_id, exc)
+                continue
+            if not chapters:
+                continue
+
+            latest = chapters[0]
+            seen = self.store.get_seen_chapter(user_id, manga_id)
+            if seen and seen[0] == latest.id:
+                continue
+
+            found += 1
+            prev_label = seen[1] if seen else "Aucune lecture enregistree"
+            lines.append(f"- <b>{_truncate(manga_title, 42)}</b>")
+            lines.append(f"  Nouveau: {latest.chapter}")
+            lines.append(f"  Dernier vu: {prev_label}")
+            rows.append(
+                [
+                    InlineKeyboardButton("Lire", callback_data=f"mfr|read|{latest.id}|{manga_id}"),
+                    InlineKeyboardButton("Fiche", callback_data=f"mfr|detail|{manga_id}"),
+                ]
+            )
+            if found >= 8:
+                break
+
+        if found == 0:
+            await target.reply(
+                "Aucune nouveaute detectee dans tes favoris pour le moment.",
+                reply_markup=self._home_kb(),
+            )
+            return
+
+        rows.append([InlineKeyboardButton("Accueil", callback_data="mfr|home|0")])
+        await target.reply("\n".join(lines), reply_markup=InlineKeyboardMarkup(rows))
 
     async def show_latest(self, target: Message, offset: int) -> None:
         try:
@@ -191,6 +248,9 @@ class MangaLibraryBot:
                 reply_markup=self._home_kb(),
             )
             return
+        if action == "updates":
+            await self.show_updates(cb.message, cb.from_user.id)
+            return
         if action == "library":
             await self.show_library(cb.message, cb.from_user.id)
             return
@@ -232,6 +292,19 @@ class MangaLibraryBot:
             manga_id = parts[2]
             manga = DETAIL_CACHE.get(manga_id) or await self.source.get_manga(manga_id)
             favored = self.store.toggle_favorite(cb.from_user.id, manga_id, manga.title)
+            if favored:
+                try:
+                    chapters = await self.source.get_chapters(manga_id, limit=1, offset=0)
+                    if chapters:
+                        self.store.mark_seen_chapter(
+                            cb.from_user.id,
+                            manga_id,
+                            manga.title,
+                            chapters[0].id,
+                            chapters[0].chapter,
+                        )
+                except Exception as exc:  # pragma: no cover
+                    log.warning("Could not prime seen chapter for %s: %s", manga_id, exc)
             await cb.answer("Ajoute aux favoris." if favored else "Retire des favoris.", show_alert=False)
             await self.show_manga_detail(client, cb.message, cb.from_user.id, manga_id, edit_existing=True)
             return
@@ -379,6 +452,13 @@ class MangaLibraryBot:
             pages.chapter,
             page_idx,
         )
+        self.store.mark_seen_chapter(
+            user_id,
+            manga_id,
+            manga.title,
+            chapter_id,
+            pages.chapter,
+        )
 
         newer_id, older_id = await self._chapter_nav_ids(manga_id, chapter_id)
         caption = f"<b>{manga.title}</b>\n{pages.chapter} - Page <b>{page_idx + 1}/{len(pages.page_urls)}</b>"
@@ -428,6 +508,7 @@ class MangaLibraryBot:
                     InlineKeyboardButton("Latest FR", callback_data="mfr|latest_page|0"),
                     InlineKeyboardButton("Bibliotheque", callback_data="mfr|library|0"),
                 ],
+                [InlineKeyboardButton("Updates", callback_data="mfr|updates|0")],
             ]
         )
 
