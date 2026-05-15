@@ -53,6 +53,25 @@ def _chapter_title(chapter_label: str, title: str) -> str:
     return f"{chapter_label} - {_truncate(title, 36)}"
 
 
+def _manga_detail_caption(
+    manga: MangaSummary,
+    *,
+    seen_label: str,
+    description_limit: int,
+) -> str:
+    tags = _esc(", ".join(manga.tags[:6]) if manga.tags else "Aucun tag")
+    description = _esc(_truncate(manga.description or "Aucun resume disponible.", description_limit))
+    return (
+        f"<b>{_esc(manga.title)}</b>\n"
+        "======================\n\n"
+        f"Statut: <b>{_status_label(manga.status)}</b>\n"
+        f"Annee: <b>{manga.year or '-'}</b>\n"
+        f"Genres: <i>{_truncate(tags, 120)}</i>\n\n"
+        f"Dernier vu: <b>{seen_label}</b>\n\n"
+        f"{description}"
+    )
+
+
 class MangaLibraryBot:
     def __init__(self, config: Config) -> None:
         self.config = config
@@ -453,17 +472,8 @@ class MangaLibraryBot:
         is_favorite = self.store.is_favorite(user_id, manga_id)
         seen = self.store.get_seen_chapter(user_id, manga_id)
 
-        tags = _esc(", ".join(manga.tags[:6]) if manga.tags else "Aucun tag")
         last_seen = _esc(seen[1]) if seen else "Aucun"
-        caption = (
-            f"<b>{_esc(manga.title)}</b>\n"
-            "======================\n\n"
-            f"Statut: <b>{_status_label(manga.status)}</b>\n"
-            f"Annee: <b>{manga.year or '-'}</b>\n"
-            f"Genres: <i>{_truncate(tags, 120)}</i>\n\n"
-            f"Dernier vu: <b>{last_seen}</b>\n\n"
-            f"{_esc(_truncate(manga.description or 'Aucun resume disponible.', 900))}"
-        )
+        caption = _manga_detail_caption(manga, seen_label=last_seen, description_limit=900)
         rows = [
             [
                 InlineKeyboardButton("Chapitres", callback_data=f"mfr|chapters|{manga_id}|0"),
@@ -484,7 +494,7 @@ class MangaLibraryBot:
             await client.send_photo(
                 chat_id=target.chat.id,
                 photo=manga.cover_url,
-                caption=caption,
+                caption=_manga_detail_caption(manga, seen_label=last_seen, description_limit=420),
                 reply_markup=keyboard,
             )
             return
