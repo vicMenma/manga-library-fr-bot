@@ -167,6 +167,13 @@ class LibraryStore:
             for row in rows
         ]
 
+    def clear_progress(self, user_id: int, manga_id: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "DELETE FROM progress WHERE user_id = ? AND manga_id = ?",
+                (user_id, manga_id),
+            )
+
     def mark_seen_chapter(
         self,
         user_id: int,

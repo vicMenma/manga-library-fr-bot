@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import logging
 
 from pyrogram import Client, filters, idle
@@ -30,6 +31,10 @@ def _truncate(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
     return text[: limit - 1].rstrip() + "..."
+
+
+def _esc(text: str | None) -> str:
+    return html.escape(text or "", quote=False)
 
 
 def _status_label(status: str) -> str:
@@ -69,12 +74,16 @@ class MangaLibraryBot:
 
     def _register_handlers(self) -> None:
         self.app.on_message(filters.private & filters.command("start"))(self.start_cmd)
+        self.app.on_message(filters.private & filters.command("help"))(self.help_cmd)
         self.app.on_message(filters.private & filters.command("library"))(self.library_cmd)
+        self.app.on_message(filters.private & filters.command("history"))(self.history_cmd)
         self.app.on_message(filters.private & filters.command("latest"))(self.latest_cmd)
         self.app.on_message(filters.private & filters.command("updates"))(self.updates_cmd)
-        self.app.on_message(filters.private & filters.text & ~filters.command(["start", "library", "latest", "updates"]))(
-            self.search_handler
-        )
+        self.app.on_message(
+            filters.private
+            & filters.text
+            & ~filters.command(["start", "help", "library", "history", "latest", "updates"])
+        )(self.search_handler)
         self.app.on_callback_query(filters.regex(r"^mfr\|"))(self.callback_router)
 
     async def start_cmd(self, _client: Client, msg: Message) -> None:
@@ -85,13 +94,21 @@ class MangaLibraryBot:
             "Tu peux aussi ouvrir les dernieres sorties FR ou reprendre ta lecture.\n\n"
             "Commandes utiles:\n"
             "- /library : favoris et reprise de lecture\n"
+            "- /history : historique recent\n"
             "- /latest : derniers chapitres FR\n"
             "- /updates : nouvelles sorties dans tes favoris\n"
+            "- /help : aide rapide\n"
         )
         await msg.reply(text, reply_markup=self._home_kb())
 
+    async def help_cmd(self, _client: Client, msg: Message) -> None:
+        await msg.reply(self._help_text(), reply_markup=self._home_kb())
+
     async def library_cmd(self, _client: Client, msg: Message) -> None:
         await self.show_library(msg, msg.from_user.id)
+
+    async def history_cmd(self, _client: Client, msg: Message) -> None:
+        await self.show_history(msg, msg.from_user.id)
 
     async def latest_cmd(self, _client: Client, msg: Message) -> None:
         await self.show_latest(msg, 0)
@@ -132,25 +149,67 @@ class MangaLibraryBot:
         favorites = self.store.list_favorites(user_id)
         progress = self.store.list_recent_progress(user_id)
 
+        lines = ["<b>Ta bibliotheque</b>", "======================", ""]
         rows: list[list[InlineKeyboardButton]] = []
         if progress:
-            rows.append([InlineKeyboardButton("Continuer", callback_data=f"mfr|continue|{progress[0].manga_id}")])
+            lines.append("<b>Continuer</b>")
+            for entry in progress[:4]:
+                lines.append(f"- {_esc(_truncate(entry.manga_title, 38))} • {_esc(entry.chapter_label)}")
+                rows.append(
+                    [
+                        InlineKeyboardButton(
+                            f"Lire {_truncate(entry.manga_title, 28)}",
+                            callback_data=f"mfr|continue|{entry.manga_id}",
+                        )
+                    ]
+                )
+            lines.append("")
+        if favorites:
+            lines.append("<b>Favoris</b>")
         for manga_id, title in favorites[:8]:
+            lines.append(f"- {_esc(_truncate(title, 48))}")
             rows.append([InlineKeyboardButton(title[:50], callback_data=f"mfr|detail|{manga_id}")])
-        rows.append([InlineKeyboardButton("Voir updates", callback_data="mfr|updates|0")])
+        rows.append(
+            [
+                InlineKeyboardButton("Historique", callback_data="mfr|history|0"),
+                InlineKeyboardButton("Voir updates", callback_data="mfr|updates|0"),
+            ]
+        )
         rows.append([InlineKeyboardButton("Accueil", callback_data="mfr|home|0")])
 
-        if len(rows) == 1:
+        if not favorites and not progress:
             await target.reply(
                 "Ta bibliotheque est encore vide.\n\nAjoute des favoris depuis la fiche d'un manga.",
                 reply_markup=self._home_kb(),
             )
             return
 
-        await target.reply(
-            "<b>Ta bibliotheque</b>\n======================\n\nRetrouve tes favoris et ta lecture en cours.",
-            reply_markup=InlineKeyboardMarkup(rows),
-        )
+        await target.reply("\n".join(lines), reply_markup=InlineKeyboardMarkup(rows))
+
+    async def show_history(self, target: Message, user_id: int) -> None:
+        progress = self.store.list_recent_progress(user_id, limit=12)
+        if not progress:
+            await target.reply(
+                "Aucun historique pour le moment.\n\nOuvre un chapitre et le bot enregistrera automatiquement ta progression.",
+                reply_markup=self._home_kb(),
+            )
+            return
+
+        lines = ["<b>Historique recent</b>", "======================", ""]
+        rows: list[list[InlineKeyboardButton]] = []
+        for entry in progress:
+            lines.append(
+                f"- <b>{_esc(_truncate(entry.manga_title, 34))}</b> • {_esc(entry.chapter_label)} "
+                f"(page {entry.page_index + 1})"
+            )
+            rows.append(
+                [
+                    InlineKeyboardButton("Continuer", callback_data=f"mfr|continue|{entry.manga_id}"),
+                    InlineKeyboardButton("Fiche", callback_data=f"mfr|detail|{entry.manga_id}"),
+                ]
+            )
+        rows.append([InlineKeyboardButton("Bibliotheque", callback_data="mfr|library|0")])
+        await target.reply("\n".join(lines), reply_markup=InlineKeyboardMarkup(rows))
 
     async def show_updates(self, target: Message, user_id: int) -> None:
         favorites = self.store.list_favorites(user_id, limit=50)
@@ -181,12 +240,13 @@ class MangaLibraryBot:
 
             found += 1
             prev_label = seen[1] if seen else "Aucune lecture enregistree"
-            lines.append(f"- <b>{_truncate(manga_title, 42)}</b>")
-            lines.append(f"  Nouveau: {latest.chapter}")
-            lines.append(f"  Dernier vu: {prev_label}")
+            lines.append(f"- <b>{_esc(_truncate(manga_title, 42))}</b>")
+            lines.append(f"  Nouveau: {_esc(latest.chapter)}")
+            lines.append(f"  Dernier vu: {_esc(prev_label)}")
             rows.append(
                 [
                     InlineKeyboardButton("Lire", callback_data=f"mfr|read|{latest.id}|{manga_id}"),
+                    InlineKeyboardButton("Marquer vu", callback_data=f"mfr|seen|{manga_id}|{latest.id}"),
                     InlineKeyboardButton("Fiche", callback_data=f"mfr|detail|{manga_id}"),
                 ]
             )
@@ -251,8 +311,14 @@ class MangaLibraryBot:
         if action == "updates":
             await self.show_updates(cb.message, cb.from_user.id)
             return
+        if action == "help":
+            await cb.message.reply(self._help_text(), reply_markup=self._home_kb())
+            return
         if action == "library":
             await self.show_library(cb.message, cb.from_user.id)
+            return
+        if action == "history":
+            await self.show_history(cb.message, cb.from_user.id)
             return
         if action == "latest_page":
             await self.show_latest(cb.message, int(parts[2]))
@@ -308,6 +374,34 @@ class MangaLibraryBot:
             await cb.answer("Ajoute aux favoris." if favored else "Retire des favoris.", show_alert=False)
             await self.show_manga_detail(client, cb.message, cb.from_user.id, manga_id, edit_existing=True)
             return
+        if action == "mark_latest":
+            manga_id = parts[2]
+            manga = DETAIL_CACHE.get(manga_id) or await self.source.get_manga(manga_id)
+            chapters = await self.source.get_chapters(manga_id, limit=1, offset=0)
+            if not chapters:
+                await cb.answer("Aucun chapitre FR a marquer.", show_alert=True)
+                return
+            self.store.mark_seen_chapter(cb.from_user.id, manga_id, manga.title, chapters[0].id, chapters[0].chapter)
+            await cb.answer("Manga marque comme a jour.", show_alert=False)
+            await self.show_manga_detail(client, cb.message, cb.from_user.id, manga_id, edit_existing=True)
+            return
+        if action == "seen":
+            manga_id, chapter_id = parts[2], parts[3]
+            manga = DETAIL_CACHE.get(manga_id) or await self.source.get_manga(manga_id)
+            chapter_label = "Chapitre lu"
+            latest = LATEST_CACHE.get(chapter_id)
+            if latest is not None:
+                chapter_label = latest.chapter_label
+            else:
+                chapters = await self.source.get_chapters(manga_id, limit=20, offset=0)
+                for chapter in chapters:
+                    if chapter.id == chapter_id:
+                        chapter_label = chapter.chapter
+                        break
+            self.store.mark_seen_chapter(cb.from_user.id, manga_id, manga.title, chapter_id, chapter_label)
+            await cb.answer("Marque comme vu.", show_alert=False)
+            await self.show_updates(cb.message, cb.from_user.id)
+            return
         if action == "continue":
             manga_id = parts[2]
             progress = self.store.get_progress(cb.from_user.id, manga_id)
@@ -325,10 +419,10 @@ class MangaLibraryBot:
             )
 
     async def show_latest_release(self, target: Message, release: LatestRelease) -> None:
-        chapter_line = _chapter_title(release.chapter_label, release.chapter_title)
-        group_line = release.scanlation_group or "Source non precisee"
+        chapter_line = _esc(_chapter_title(release.chapter_label, release.chapter_title))
+        group_line = _esc(release.scanlation_group or "Source non precisee")
         await target.reply(
-            f"<b>{release.manga_title}</b>\n"
+            f"<b>{_esc(release.manga_title)}</b>\n"
             "======================\n\n"
             f"{chapter_line}\n"
             f"Groupe: <i>{_truncate(group_line, 80)}</i>\n\n"
@@ -357,15 +451,18 @@ class MangaLibraryBot:
         DETAIL_CACHE[manga_id] = manga
         progress = self.store.get_progress(user_id, manga_id)
         is_favorite = self.store.is_favorite(user_id, manga_id)
+        seen = self.store.get_seen_chapter(user_id, manga_id)
 
-        tags = ", ".join(manga.tags[:6]) if manga.tags else "Aucun tag"
+        tags = _esc(", ".join(manga.tags[:6]) if manga.tags else "Aucun tag")
+        last_seen = _esc(seen[1]) if seen else "Aucun"
         caption = (
-            f"<b>{manga.title}</b>\n"
+            f"<b>{_esc(manga.title)}</b>\n"
             "======================\n\n"
             f"Statut: <b>{_status_label(manga.status)}</b>\n"
             f"Annee: <b>{manga.year or '-'}</b>\n"
             f"Genres: <i>{_truncate(tags, 120)}</i>\n\n"
-            f"{_truncate(manga.description or 'Aucun resume disponible.', 900)}"
+            f"Dernier vu: <b>{last_seen}</b>\n\n"
+            f"{_esc(_truncate(manga.description or 'Aucun resume disponible.', 900))}"
         )
         rows = [
             [
@@ -375,7 +472,12 @@ class MangaLibraryBot:
         ]
         if progress:
             rows.append([InlineKeyboardButton("Continuer", callback_data=f"mfr|continue|{manga_id}")])
-        rows.append([InlineKeyboardButton("Latest FR", callback_data="mfr|latest_page|0")])
+        rows.append(
+            [
+                InlineKeyboardButton("Marquer a jour", callback_data=f"mfr|mark_latest|{manga_id}"),
+                InlineKeyboardButton("Latest FR", callback_data="mfr|latest_page|0"),
+            ]
+        )
         keyboard = InlineKeyboardMarkup(rows)
 
         if manga.cover_url and not edit_existing:
@@ -417,7 +519,7 @@ class MangaLibraryBot:
         rows.append([InlineKeyboardButton("Retour fiche", callback_data=f"mfr|detail|{manga_id}")])
 
         await target.reply(
-            f"<b>{manga.title}</b>\n======================\n\nChapitres FR disponibles:",
+            f"<b>{_esc(manga.title)}</b>\n======================\n\nChapitres FR disponibles:",
             reply_markup=InlineKeyboardMarkup(rows),
         )
 
@@ -461,7 +563,10 @@ class MangaLibraryBot:
         )
 
         newer_id, older_id = await self._chapter_nav_ids(manga_id, chapter_id)
-        caption = f"<b>{manga.title}</b>\n{pages.chapter} - Page <b>{page_idx + 1}/{len(pages.page_urls)}</b>"
+        caption = (
+            f"<b>{_esc(manga.title)}</b>\n"
+            f"{_esc(pages.chapter)} - Page <b>{page_idx + 1}/{len(pages.page_urls)}</b>"
+        )
         rows = [[]]
         if page_idx > 0:
             rows[0].append(InlineKeyboardButton("Prev page", callback_data=f"mfr|page|{chapter_id}|{manga_id}|{page_idx - 1}"))
@@ -508,8 +613,31 @@ class MangaLibraryBot:
                     InlineKeyboardButton("Latest FR", callback_data="mfr|latest_page|0"),
                     InlineKeyboardButton("Bibliotheque", callback_data="mfr|library|0"),
                 ],
-                [InlineKeyboardButton("Updates", callback_data="mfr|updates|0")],
+                [
+                    InlineKeyboardButton("Updates", callback_data="mfr|updates|0"),
+                    InlineKeyboardButton("Historique", callback_data="mfr|history|0"),
+                ],
+                [InlineKeyboardButton("Aide", callback_data="mfr|help|0")],
             ]
+        )
+
+    def _help_text(self) -> str:
+        return (
+            "<b>Aide rapide</b>\n"
+            "======================\n\n"
+            "1. Envoie le nom d'un manga.\n"
+            "2. Ouvre sa fiche.\n"
+            "3. Ajoute-le en favori pour suivre les sorties.\n"
+            "4. Lis un chapitre: la progression est sauvegardee automatiquement.\n\n"
+            "<b>Commandes</b>\n"
+            "- /library : favoris + reprise\n"
+            "- /history : dernieres lectures\n"
+            "- /latest : sorties FR recentes\n"
+            "- /updates : nouveaux chapitres de tes favoris\n\n"
+            "<b>Astuces</b>\n"
+            "- \"Marquer a jour\" enregistre le dernier chapitre comme deja vu.\n"
+            "- \"Continuer\" reprend exactement a la page sauvegardee.\n"
+            "- Les updates se basent sur tes favoris, donc pense a les ajouter."
         )
 
     async def run_async(self) -> None:
