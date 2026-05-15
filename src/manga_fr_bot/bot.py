@@ -154,7 +154,7 @@ class MangaLibraryBot:
         if progress:
             lines.append("<b>Continuer</b>")
             for entry in progress[:4]:
-                lines.append(f"- {_esc(_truncate(entry.manga_title, 38))} • {_esc(entry.chapter_label)}")
+                lines.append(f"- {_esc(_truncate(entry.manga_title, 38))} - {_esc(entry.chapter_label)}")
                 rows.append(
                     [
                         InlineKeyboardButton(
@@ -199,7 +199,7 @@ class MangaLibraryBot:
         rows: list[list[InlineKeyboardButton]] = []
         for entry in progress:
             lines.append(
-                f"- <b>{_esc(_truncate(entry.manga_title, 34))}</b> • {_esc(entry.chapter_label)} "
+                f"- <b>{_esc(_truncate(entry.manga_title, 34))}</b> - {_esc(entry.chapter_label)} "
                 f"(page {entry.page_index + 1})"
             )
             rows.append(
@@ -660,12 +660,18 @@ def run() -> None:
     if uvloop is not None:
         uvloop.install()
 
-    bot = MangaLibraryBot(config)
-
-    async def _main() -> None:
+    async def _main(bot: MangaLibraryBot) -> None:
         try:
             await bot.run_async()
         finally:
             await bot.stop_async()
 
-    asyncio.run(_main())
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    bot = MangaLibraryBot(config)
+    try:
+        loop.run_until_complete(_main(bot))
+    finally:
+        loop.run_until_complete(loop.shutdown_asyncgens())
+        asyncio.set_event_loop(None)
+        loop.close()
