@@ -8,6 +8,7 @@ A Telegram manga library bot focused on French chapters, built with a MangaDex-f
 - Manga details with status, year, genres, and cover
 - Chapter browser
 - Page-by-page Telegram reader
+- Latest French releases view
 - Favorites
 - Reading progress / continue reading
 - SQLite storage for personal library data
@@ -36,14 +37,25 @@ pip install -e .
 python main.py
 ```
 
+## Colab
+
+There is now a dedicated launcher:
+
+```bash
+python colab_launcher.py
+```
+
+If you open the file in Colab, you can use the form fields directly.
+
 ## Commands
 
 - `/start` - welcome screen
 - `/library` - favorites and continue reading
-- `/latest` - placeholder for latest French releases
+- `/latest` - latest French releases
 
 ## Notes
 
 - This V1 starter filters chapter browsing to French by default.
+- The Colab launcher writes a fresh `.env` for each run and stores data on Drive.
 - The source layer is adapter-based so more French manga sources can be added later.
 - MangaDex API behavior can evolve, so the adapter should stay isolated from the Telegram UI.

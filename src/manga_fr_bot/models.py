@@ -39,3 +39,13 @@ class ProgressEntry:
     chapter_id: str
     chapter_label: str
     page_index: int
+
+
+@dataclass(slots=True)
+class LatestRelease:
+    manga_id: str
+    manga_title: str
+    chapter_id: str
+    chapter_label: str
+    chapter_title: str
+    scanlation_group: str | None

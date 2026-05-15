@@ -4,7 +4,7 @@ from typing import Any
 
 import httpx
 
-from manga_fr_bot.models import ChapterPages, ChapterSummary, MangaSummary
+from manga_fr_bot.models import ChapterPages, ChapterSummary, LatestRelease, MangaSummary
 
 
 class MangaDexClient:
@@ -20,7 +20,7 @@ class MangaDexClient:
         self.uploads_base = uploads_base.rstrip("/")
         self.language = language
         self.data_saver = data_saver
-        self.client = httpx.AsyncClient(timeout=timeout, headers={"User-Agent": "MangaLibraryFR/0.1"})
+        self.client = httpx.AsyncClient(timeout=timeout, headers={"User-Agent": "MangaLibraryFR/0.2"})
 
     async def close(self) -> None:
         await self.client.aclose()
@@ -48,6 +48,12 @@ class MangaDexClient:
         for rel in relationships:
             if rel.get("type") == "scanlation_group":
                 return (rel.get("attributes") or {}).get("name")
+        return None
+
+    def _manga_rel(self, relationships: list[dict[str, Any]]) -> dict[str, Any] | None:
+        for rel in relationships:
+            if rel.get("type") == "manga":
+                return rel
         return None
 
     def _tags(self, attributes: dict[str, Any]) -> list[str]:
@@ -125,23 +131,54 @@ class MangaDexClient:
             attr = item.get("attributes") or {}
             title = attr.get("title") or "Sans titre"
             chapter_num = attr.get("chapter") or "?"
-            chapter_label = f"Ch. {chapter_num}"
             chapters.append(
                 ChapterSummary(
                     id=item["id"],
                     title=title,
-                    chapter=chapter_label,
+                    chapter=f"Ch. {chapter_num}",
                     pages=attr.get("pages", 0),
                     scanlation_group=self._scanlation_name(item.get("relationships") or []),
                 )
             )
         return chapters
 
+    async def get_latest_releases(self, limit: int = 10, offset: int = 0) -> list[LatestRelease]:
+        params = [
+            ("translatedLanguage[]", self.language),
+            ("limit", str(limit)),
+            ("offset", str(offset)),
+            ("includes[]", "manga"),
+            ("includes[]", "scanlation_group"),
+            ("contentRating[]", "safe"),
+            ("contentRating[]", "suggestive"),
+            ("order[publishAt]", "desc"),
+        ]
+        payload = await self._get_json("/chapter", params=params)
+        releases: list[LatestRelease] = []
+        for item in payload.get("data", []):
+            manga_rel = self._manga_rel(item.get("relationships") or [])
+            if manga_rel is None:
+                continue
+            manga_id = manga_rel.get("id", "")
+            manga_attr = manga_rel.get("attributes") or {}
+            chapter_attr = item.get("attributes") or {}
+            chapter_num = chapter_attr.get("chapter") or "?"
+            releases.append(
+                LatestRelease(
+                    manga_id=manga_id,
+                    manga_title=self._pick_text(manga_attr.get("title"), "Sans titre"),
+                    chapter_id=item["id"],
+                    chapter_label=f"Ch. {chapter_num}",
+                    chapter_title=chapter_attr.get("title") or "Sans titre",
+                    scanlation_group=self._scanlation_name(item.get("relationships") or []),
+                )
+            )
+        return releases
+
     async def get_chapter_pages(self, chapter_id: str, manga_id: str, manga_title: str) -> ChapterPages:
         chapter_payload = await self._get_json(f"/chapter/{chapter_id}")
         chapter_item = chapter_payload["data"]
         chapter_attr = chapter_item.get("attributes") or {}
-        title = chapter_attr.get("title") or "Sans titre"
         chapter_num = chapter_attr.get("chapter") or "?"
 
         at_home = await self._get_json(f"/at-home/server/{chapter_id}")
