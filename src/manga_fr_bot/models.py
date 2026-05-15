@@ -21,6 +21,7 @@ class ChapterSummary:
     chapter: str
     pages: int
     scanlation_group: str | None
+    external_url: str | None = None
 
 
 @dataclass(slots=True)
@@ -30,6 +31,7 @@ class ChapterPages:
     title: str
     chapter: str
     page_urls: list[str]
+    external_url: str | None = None
 
 
 @dataclass(slots=True)

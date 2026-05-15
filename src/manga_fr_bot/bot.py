@@ -575,6 +575,20 @@ class MangaLibraryBot:
             PAGE_CACHE[chapter_id] = pages
 
         if not pages.page_urls:
+            if pages.external_url:
+                await target.reply(
+                    f"<b>{_esc(manga.title)}</b>\n"
+                    f"{_esc(pages.chapter)}\n\n"
+                    "Ce chapitre FR est fourni via une source externe et n'est pas lisible page par page directement dans Telegram.",
+                    reply_markup=InlineKeyboardMarkup(
+                        [
+                            [InlineKeyboardButton("Lire sur la source", url=pages.external_url)],
+                            [InlineKeyboardButton("Retour chapitres", callback_data=_cb("chapters", manga_id, "0"))],
+                        ]
+                    ),
+                    disable_web_page_preview=True,
+                )
+                return
             await target.reply("Impossible de charger les pages de ce chapitre.")
             return
 

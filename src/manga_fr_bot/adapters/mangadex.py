@@ -138,6 +138,7 @@ class MangaDexClient:
                     chapter=f"Ch. {chapter_num}",
                     pages=attr.get("pages", 0),
                     scanlation_group=self._scanlation_name(item.get("relationships") or []),
+                    external_url=attr.get("externalUrl"),
                 )
             )
         return chapters
@@ -196,6 +197,7 @@ class MangaDexClient:
         chapter_item = chapter_payload["data"]
         chapter_attr = chapter_item.get("attributes") or {}
         chapter_num = chapter_attr.get("chapter") or "?"
+        external_url = chapter_attr.get("externalUrl")
 
         at_home = await self._get_json(f"/at-home/server/{chapter_id}")
         chapter = at_home["chapter"]
@@ -211,4 +213,5 @@ class MangaDexClient:
             title=f"{manga_title} - Ch. {chapter_num}",
             chapter=f"Ch. {chapter_num}",
             page_urls=page_urls,
+            external_url=external_url,
         )
